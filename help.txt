@@ -1,6 +1,6 @@
 Welcome to TermiArt!
 
-Usage: ./termiart [--help] [--dimens <width> <height>] [--file <filename>]
+Usage: ./termiart [--help] [--dimens <width> <height>] [--file <filename>] [--display <filename>]
 
 Flags:
     --help: print this help message.
