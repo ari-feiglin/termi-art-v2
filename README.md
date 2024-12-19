@@ -1,5 +1,5 @@
 # TermiArt v0.0.1
-## pixel art in your terminal
+*pixel art in your terminal*
 
 ![TermiArt Logo](tart-logo.png)
 
