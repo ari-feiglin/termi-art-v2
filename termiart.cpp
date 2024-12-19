@@ -9,8 +9,10 @@
 #include <sstream>
 #include <csignal>
 #include <fstream>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
-std::string version_no = "v0.0.0";
+std::string version_no = "v0.0.1";
 
 typedef unsigned char uchar;
 typedef unsigned int uint;
@@ -63,27 +65,31 @@ struct Point {
     }
 };
 
-enum ColorCode { NONE = 0, BOUNDARY = 1, TEMP = 2 };
+enum PixelCode { NONE = 0, BOUNDARY = 1, TEMP = 2 };
 
-struct Color {
-    static Color white;
-    static Color black;
-    static Color red;
-    static Color blue;
-    static Color green;
-    static Color temp;
+struct Pixel {
+    static Pixel white;
+    static Pixel black;
+    static Pixel red;
+    static Pixel blue;
+    static Pixel green;
+    static Pixel temp;
 
     uchar r;
     uchar g;
     uchar b;
 
-    ColorCode code;
+    PixelCode code;
+    uchar fg_r;
+    uchar fg_g;
+    uchar fg_b;
+    std::string text;
 
-    Color() : r{255}, g{255}, b{255}, code{NONE} {}
-    Color(uchar r, uchar g, uchar b, ColorCode code = NONE) : r{r}, g{g}, b{b}, code{code} {}
-    Color(const Color& c) : r{c.r}, g{c.g}, b{c.b}, code{c.code} {}
-    Color(Color&& c) : r{c.r}, g{c.g}, b{c.b}, code{c.code} {}
-    Color& operator=(const Color& c) {
+    Pixel() : r{255}, g{255}, b{255}, code{NONE}, text{"  "} {}
+    Pixel(uchar r, uchar g, uchar b, uchar fg_r = 0, uchar fg_g = 0, uchar fg_b = 0, std::string text = "  ", PixelCode code = NONE) : r{r}, g{g}, b{b}, fg_r{fg_r}, fg_g{fg_g}, fg_b{fg_b}, code{code}, text{text} {}
+    Pixel(const Pixel& c) : r{c.r}, g{c.g}, b{c.b}, fg_r{c.fg_r}, fg_g{c.fg_g}, fg_b{c.fg_b}, code{c.code}, text{c.text} {}
+    Pixel(Pixel&& c) : r{c.r}, g{c.g}, b{c.b}, fg_r{c.fg_r}, fg_g{c.fg_g}, fg_b{c.fg_b}, code{c.code}, text{c.text} {}
+    Pixel& operator=(const Pixel& c) {
         if (c.code == TEMP) {
             code = TEMP;
             return *this;
@@ -92,9 +98,13 @@ struct Color {
         g = c.g;
         b = c.b;
         code = c.code;
+        fg_r = c.fg_r;
+        fg_g = c.fg_g;
+        fg_b = c.fg_b;
+        text = c.text;
         return *this;
     }
-    Color& operator=(Color&& c) {
+    Pixel& operator=(Pixel&& c) {
         if (c.code == TEMP) {
             code = TEMP;
             return *this;
@@ -103,21 +113,25 @@ struct Color {
         g = std::move(c.g);
         b = std::move(c.b);
         code = std::move(c.code);
+        fg_r = std::move(c.fg_r);
+        fg_g = std::move(c.fg_g);
+        fg_b = std::move(c.fg_b);
+        text = std::move(c.text);
         return *this;
     }
 
-    Color get_reverse() const {
-        return Color(255 - r, 255 - g, 255 - b);
+    Pixel get_reverse() const {
+        return Pixel(255 - r, 255 - g, 255 - b);
     }
 
-    Color& reverse() {
+    Pixel& reverse() {
         r = 255 - r;
         g = 255 - g;
         b = 255 - b;
         return *this;
     }
 
-    Color& set_code(ColorCode code) {
+    Pixel& set_code(PixelCode code) {
         this->code = code;
         return *this;
     }
@@ -131,17 +145,25 @@ struct Color {
     }
 };
 
-Color Color::white(255,255,255);
-Color Color::black(0,0,0);
-Color Color::red(255,0,0);
-Color Color::green(0,255,0);
-Color Color::blue(0,0,255);
-Color Color::temp(0,0,0,TEMP);
+Pixel Pixel::white(255,255,255);
+Pixel Pixel::black(0,0,0);
+Pixel Pixel::red(255,0,0);
+Pixel Pixel::green(0,255,0);
+Pixel Pixel::blue(0,0,255);
+Pixel Pixel::temp(0,0,0,0,0,0,"  ",TEMP);
 
 class Canvas {
     private:
-        Color* canvas;
-        std::vector<Color*> past_canvases;
+        struct CanvasHolder {
+            Pixel* canvas;
+            uint width;
+            uint height;
+
+            CanvasHolder(Pixel* canvas, uint width, uint height) : canvas{canvas}, width{width}, height{height} {}
+        };
+
+        Pixel* canvas;
+        std::vector<CanvasHolder> past_canvases;
         std::set<uint> update_lines;
         std::set<Point<Point<uint>>> boundary_points;
         uint width;
@@ -222,7 +244,7 @@ class Canvas {
         void reset_temp() {
             for (int i = 0; i < width; i++) {
                 for (int j = 0; j < height; j++) {
-                    Color& c = canvas[j * width + i];
+                    Pixel& c = canvas[j * width + i];
                     if (c.code == TEMP) {
                         c.code = NONE;
                         update_lines.insert(j);
@@ -232,8 +254,8 @@ class Canvas {
         }
 
     public:
-        Canvas(uint width, uint height, Color bg = Color::white) : width{width}, height{height} {
-            canvas = new Color[width * height];
+        Canvas(uint width, uint height, Pixel bg = Pixel::white) : width{width}, height{height} {
+            canvas = new Pixel[width * height];
             for (int i = 0; i < width * height; i++) canvas[i] = bg;
             for (int i = 0; i < height; i++) update_lines.insert(i);
         }
@@ -256,20 +278,28 @@ class Canvas {
 
             input_file.read(reinterpret_cast<char*>(&width), sizeof(width));
             input_file.read(reinterpret_cast<char*>(&height), sizeof(height));
-            canvas = new Color[width * height];
+            canvas = new Pixel[width * height];
+
+            uchar r,g,b,fg_r,fg_g,fg_b;
+            char buf[3] = {0};
 
             for (int i = 0; i < width * height; i++) {
-                uchar r,g,b;
-                input_file >> r >> g >> b;
-                canvas[i] = Color(r,g,b);
+                input_file.read(reinterpret_cast<char*>(&r), 1);
+                input_file.read(reinterpret_cast<char*>(&g), 1);
+                input_file.read(reinterpret_cast<char*>(&b), 1);
+                input_file.read(reinterpret_cast<char*>(&fg_r), 1);
+                input_file.read(reinterpret_cast<char*>(&fg_g), 1);
+                input_file.read(reinterpret_cast<char*>(&fg_b), 1);
+                input_file.read(buf, 2);
+                canvas[i] = Pixel(r,g,b,fg_r,fg_g,fg_b,std::string(buf));
             }
 
             for (int i = 0; i < height; i++) update_lines.insert(i);
         }
 
         ~Canvas() {
-            delete canvas;
-            for (int i = 0; i < past_canvases.size(); i++) delete past_canvases[i];
+            delete[] canvas;
+            for (int i = 0; i < past_canvases.size(); i++) delete[] past_canvases[i].canvas;
         }
 
         uint get_width() { return width; }
@@ -284,39 +314,74 @@ class Canvas {
             output_file.write(reinterpret_cast<char*>(&width), sizeof(width));
             output_file.write(reinterpret_cast<char*>(&height), sizeof(height));
 
-            for (int i = 0; i < width * height; i++) output_file << canvas[i].r << canvas[i].g << canvas[i].b;
+            for (int i = 0; i < width * height; i++) {
+                output_file << canvas[i].r << canvas[i].g << canvas[i].b << canvas[i].fg_r << canvas[i].fg_g << canvas[i].fg_b;
+                output_file.write(canvas[i].text.c_str(), 2);
+            }
+
             output_file.close();
         }
 
         void save_old() {
-            Color* old_canvas = new Color[width * height];
+            Pixel* old_canvas = new Pixel[width * height];
             for (int i = 0; i < width * height; i++) old_canvas[i] = canvas[i];
-            past_canvases.push_back(old_canvas);
+            past_canvases.push_back(CanvasHolder(old_canvas, width, height));
         }
 
         void undo(int times = 1) {
-            if (!past_canvases.empty()) {
-                delete canvas;
-                for (int i = 0; i < times; i++) {
-                    canvas = past_canvases.back();
-                    past_canvases.pop_back();
-                }
-                for (int i = 0; i < height; i++) update_lines.insert(i);
+            bool flag = false;
+            CanvasHolder holder(NULL, 0,0);
+
+            for (int i = 0; i < height; i++) update_lines.insert(i);
+
+            for (int i = 0; i < times; i++) {
+                if (past_canvases.empty()) break;
+                flag = true;
+                delete[] canvas;
+                holder = past_canvases.back();
+                past_canvases.pop_back();
             }
+
+            if (!flag) return;
+
+            width = holder.width;
+            height = holder.height;
+            canvas = holder.canvas;
+
         }
 
-        const Color& operator[](uint i, uint j) { return canvas[j * width + i]; }
+        void resize(uint width, uint height) {
+            save_old();
+            Pixel* new_canvas = new Pixel[width * height]();
+
+            update_lines.clear();
+
+            for (int i = 0; i < std::min(height, this->height); i++) {
+                for (int j = 0; j < std::min(width, this->width); j++)
+                    new_canvas[i * width + j] = canvas[i * this->width + j];
+            }
+
+            for (int i = 0; i < height; i++) update_lines.insert(i);
+
+            delete[] canvas;
+            canvas = new_canvas;
+
+            this->width = width;
+            this->height = height;
+        }
+
+        const Pixel& operator[](uint i, uint j) { return canvas[j * width + i]; }
 
         void update_line(uint i) { update_lines.insert(i); }
 
-        void point(Color c, Point<uint> p) {
+        void point(Pixel c, Point<uint> p) {
             check_point(p);
             save_old();
             canvas[p.y * width + p.x] = c;
             update_lines.insert(p.y);
         }
 
-        void fill_area(Point<uint> start, Point<uint> end, Color c) {
+        void fill_area(Point<uint> start, Point<uint> end, Pixel c) {
             check_point(start);
             check_point(end);
 
@@ -332,14 +397,31 @@ class Canvas {
             }
         }
 
+        void add_text(Point<uint> p, std::string text, uchar r, uchar g, uchar b) {
+            for (int i = p.x, j = 0; i < width && j < text.length(); i++, j += 2) {
+                Pixel& c = canvas[p.y * width + i];
+                c.text = std::format("{}{}", text[j], (j + 1 < text.length()) ? text[j+1] : ' ');
+                c.fg_r = r;
+                c.fg_g = g;
+                c.fg_b = b;
+            }
+        }
+
         void draw() {
             for (const int& i : update_lines) {
                 std::string line;
                 for (int j = 0; j < width; j++) {
-                    Color c = canvas[i * width + j];
-                    Color r = c.get_reverse();
+                    const Pixel& c = canvas[i * width + j];
+                    Pixel r = c.get_reverse();
                     switch (c.code) {
-                        case NONE: line += std::format("\033[48;2;{};{};{}m\033[38;2;{};{};{}m  ", c.r, c.g, c.b, r.r, r.g, r.b); break;
+                        case NONE: {
+                            std::string t = c.text.substr(0,2);
+                            if (t == "  ")
+                                line += std::format("\033[48;2;{};{};{}m\033[38;2;{};{};{}m{}", c.r, c.g, c.b, r.r, r.g, r.b, t);
+                            else
+                                line += std::format("\033[48;2;{};{};{}m\033[38;2;{};{};{}m{}", c.r, c.g, c.b, c.fg_r, c.fg_g, c.fg_b, t);
+                            break;
+                        }
                         case BOUNDARY: line += std::format("\033[48;2;{};{};{}m\033[38;2;{};{};{}m::", c.r, c.g, c.b, r.r, r.g, r.b); break;
                         case TEMP: line += "\033[48;2;255;255;255m\033[38;0;0;0m##"; break;
                         default: line += "  "; break;
@@ -365,7 +447,7 @@ class Canvas {
             Point<double> d = Point((e.x - b.x), (e.y - b.y)) * delta;
 
             for (int i = 0; i <= fineness; i++) {
-                Color& c = canvas[std::lround(b.y) * width + std::lround(b.x)];
+                Pixel& c = canvas[std::lround(b.y) * width + std::lround(b.x)];
                 if (c.code != BOUNDARY) {
                     c.set_code(BOUNDARY);
                     update_lines.insert(std::lround(b.y));
@@ -376,7 +458,7 @@ class Canvas {
             boundary_points.insert(Point(start, end));
         }
 
-        void draw_line(Point<uint> start, Point<uint> end, Color c, uint fineness = 1000) {
+        void draw_line(Point<uint> start, Point<uint> end, Pixel c, uint fineness = 1000) {
             check_point(start);
             check_point(end);
 
@@ -396,14 +478,14 @@ class Canvas {
             if (c.code != TEMP) reset_temp();
         }
 
-        void fill_area(Point<uint> p, Color c) {
+        void fill_area(Point<uint> p, Pixel c) {
             check_point(p);
 
             save_old();
 
             for (int i = 0; i < width; i++) {
                 for (int j = 0; j < height; j++) {
-                    Color& curr = canvas[j * width + i];
+                    Pixel& curr = canvas[j * width + i];
                     if (in_area(p, Point<uint>(i, j)) || curr.code == BOUNDARY) {
                         curr = c;
                         update_lines.insert(j);
@@ -414,7 +496,7 @@ class Canvas {
             if (c.code != TEMP) reset_temp();
         }
 
-        void draw_circle(Point<uint> p, uint r, Color c) {
+        void draw_circle(Point<uint> p, uint r, Pixel c) {
             check_point(p);
 
             save_old();
@@ -435,7 +517,125 @@ class Canvas {
             if (c.code != TEMP) reset_temp();
         }
 
-        void fill_circle(Point<uint> p, uint r, Color c) {
+        void draw_ellipse(Point<uint> p, int r1, int r2, Pixel c) {
+            if (r1 == 0 || r2 == 0) return;
+            check_point(p);
+
+            save_old();
+
+            r1 = std::abs(r1);
+            r2 = std::abs(r2);
+            double r12 = r1 * r1;
+            double r22 = r2 * r2;
+
+            /*for (int i = 0; i < width; i++) {
+                for (int j = 0; j < height; j++) {
+                    int dx = i - p.x;
+                    int dy = j - p.y;
+                    int a = r2 * r2 * dx * dx + r1 * r1 * dy * dy;
+                    int r = r1 * r2;
+                    if (r * r - r * std::sqrt(r) <= a && a <= r * r + r * std::sqrt(r)) {
+                        canvas[j * width + i] = c;
+                        update_lines.insert(j);
+                    }
+                }
+            }*/
+
+            for (int i = 0; i < height; i++) {
+                for (int j = 0; j < width; j++) {
+                    Point<double> diffs[] = {Point<double>(-.5,.5), Point<double>(.5,.5), Point<double>(.5,-.5), Point<double>(-.5,-.5)};
+                    double vals[] = {0,0,0,0};
+                    for (int k = 0; k < 4; k++) {
+                        double dx = (double)j - p.x - diffs[k].x;
+                        double dy = (double)i - p.y - diffs[k].y;
+                        vals[k] = r22 * dx * dx + r12 * dy * dy;
+                    }
+
+                    int state = 0;
+                    bool flag = false;
+                    for (int k = 0; k < 4; k++) {
+                        if (vals[k] == r12 * r22) {
+                            flag = true;
+                            break;
+                        } else if (vals[k] < r12 * r22) {
+                            if (state == 1) {
+                                flag = true;
+                                break;
+                            }
+                            state = -1;
+                        } else if (vals[k] > r12 * r22) {
+                            if (state == -1) {
+                                flag = true;
+                                break;
+                            }
+                            state = 1;
+                        }
+                    }
+
+                    if (flag) {
+                        canvas[i * width + j] = c;
+                        update_lines.insert(i);
+                    }
+                }
+            }
+
+            if (c.code != TEMP) reset_temp();
+        }
+
+        void fill_ellipse(Point<uint> p, int r1, int r2, Pixel c) {
+            if (r1 == 0 || r2 == 0) return;
+            check_point(p);
+
+            save_old();
+
+            r1 = std::abs(r1);
+            r2 = std::abs(r2);
+            double r12 = r1 * r1;
+            double r22 = r2 * r2;
+
+            for (int i = 0; i < height; i++) {
+                for (int j = 0; j <= p.x; j++) {
+                    Point<double> diffs[] = {Point<double>(-.5,.5), Point<double>(.5,.5), Point<double>(.5,-.5), Point<double>(-.5,-.5)};
+                    double vals[] = {0,0,0,0};
+                    for (int k = 0; k < 4; k++) {
+                        double dx = (double)j - p.x - diffs[k].x;
+                        double dy = (double)i - p.y - diffs[k].y;
+                        vals[k] = r22 * dx * dx + r12 * dy * dy;
+                    }
+
+                    int state = 0;
+                    bool flag = false;
+                    for (int k = 0; k < 4; k++) {
+                        if (vals[k] == r12 * r22) {
+                            flag = true;
+                            break;
+                        } else if (vals[k] < r12 * r22) {
+                            if (state == 1) {
+                                flag = true;
+                                break;
+                            }
+                            state = -1;
+                        } else if (vals[k] > r12 * r22) {
+                            if (state == -1) {
+                                flag = true;
+                                break;
+                            }
+                            state = 1;
+                        }
+                    }
+
+                    if (flag) {
+                        for (int k = j; k <= 2 * p.x - j; k++)
+                            canvas[i * width + k] = c;
+                        update_lines.insert(i);
+                    }
+                }
+            }
+
+            if (c.code != TEMP) reset_temp();
+        }
+
+        void fill_circle(Point<uint> p, uint r, Pixel c) {
             check_point(p);
 
             save_old();
@@ -464,6 +664,30 @@ struct Command {
     virtual void execute(Drawer& d) =0;
 };
 
+struct QuitCommand : public Command {
+    QuitCommand() {}
+    void execute(Drawer& d) override;
+};
+
+struct HelpCommand : public Command {
+    std::string fname;
+    HelpCommand(std::string fname) : fname{fname} {}
+    void execute(Drawer& d) override;
+};
+
+struct ResizeCommand : public Command {
+    uint width;
+    uint height;
+    ResizeCommand(uint width, uint height) : width{width}, height{height} {}
+    void execute(Drawer& d) override;
+};
+
+struct ScrollCommand : public Command {
+    int dy;
+    ScrollCommand(int dy) : dy{dy} {}
+    void execute(Drawer& d) override;
+};
+
 struct OutputCommand : public Command {
     std::string output;
     OutputCommand(std::string output) : output{output} {}
@@ -484,9 +708,15 @@ struct CursorCommand : public Command {
     void execute(Drawer& d) override;
 };
 
-struct ColorChangeCommand : public Command {
-    Color c;
-    ColorChangeCommand(Color c) : c{c} {}
+struct PixelChangeCommand : public Command {
+    Pixel c;
+    PixelChangeCommand(Pixel c) : c{c} {}
+    void execute(Drawer& d) override;
+};
+
+struct AddTextCommand : public Command {
+    std::string text;
+    AddTextCommand(std::string text) : text{text} {}
     void execute(Drawer& d) override;
 };
 
@@ -515,6 +745,13 @@ struct FillCircleCommand : public Command {
     Point<uint> p;
     uint r;
     FillCircleCommand(Point<uint> p, uint r) : p{p}, r{r} {}
+    void execute(Drawer& d) override;
+};
+
+struct FillAreaCommand : public Command {
+    Point<uint> p1;
+    Point<uint> p2;
+    FillAreaCommand(Point<uint> p1, Point<uint> p2) : p1{p1}, p2{p2} {}
     void execute(Drawer& d) override;
 };
 
@@ -569,32 +806,45 @@ std::vector<std::string> split_string(std::string s, std::string delimiter) {
 class OutputTerminal {
     private:
         Point<uint> pos;
-        Color bg;
-        Color fg;
+        Pixel bg;
+        Pixel fg;
         uint width;
         uint height;
+        std::vector<std::string> lines;
+        int first_line;
 
     public:
-        OutputTerminal(Point<uint> pos, uint width, uint height, Color bg, Color fg) : pos{pos}, width{width}, height{height}, bg{bg}, fg{fg}
+        OutputTerminal(Point<uint> pos, uint width, uint height, Pixel bg, Pixel fg) : pos{pos}, width{width}, height{height}, bg{bg}, fg{fg}, first_line{0}
             {}
 
-        void draw(std::string output) {
-            std::vector<std::string> lines = split_string_to_lines(output, width - 2);
+        void draw() {
             std::string line = std::string(width, ' ');
 
             std::print("{}{}", bg.bg(), fg.fg());
             for (int i = 1; i <= height; i++)
                 std::print("\033[{};{}H{}", pos.y + i, pos.x + 1, line);
-            for (int i = 0; i < lines.size(); i++)
-                std::print("\033[{};{}H{}", pos.y + i + 2, pos.x + 2, lines[i]);
+            for (int i = 0; i < std::min((uint)lines.size() - (uint)first_line, height - 2); i++)
+                std::print("\033[{};{}H{}", pos.y + i + 2, pos.x + 2, lines[i + first_line]);
+        }
+
+        void draw(std::string output) {
+            lines = split_string_to_lines(output, width - 2);
+            draw();
+        }
+
+        void move(int dy) {
+            first_line += dy;
+            if (first_line < 0) first_line = 0;
+            else if (first_line >= lines.size()) first_line = lines.size() - 1;
+            draw();
         }
 };
 
 class Terminal {
     private:
         Point<uint> pos;
-        Color bg;
-        Color fg;
+        Pixel bg;
+        Pixel fg;
         uint width;
         uint height;
         std::string command;
@@ -602,7 +852,19 @@ class Terminal {
         Command* to_command() {
             std::vector<std::string> strs = split_string(command, " ");
 
-            if (strs[0] == "print") {
+            if (strs[0] == "quit") {
+                return new QuitCommand();
+            } if (strs[0] == "help") {
+                if (strs.size() > 1 && strs[1] == "terminal")
+                    return new HelpCommand("help-terminal.txt");
+                return new HelpCommand("help-editor.txt");
+            } else if (strs[0] == "resize") {
+                if (strs.size() < 3) return NULL;
+                return new ResizeCommand(std::stoi(strs[1]), std::stoi(strs[2]));
+            } else if (strs[0] == "scroll") {
+                if (strs.size() < 2) return NULL;
+                return new ScrollCommand(std::stoi(strs[1]));
+            } if (strs[0] == "print") {
                 return new OutputCommand(command.substr(6));
             } else if (strs[0] == "undo") {
                 if (strs.size() > 1)
@@ -616,10 +878,12 @@ class Terminal {
             } else if (strs[0] == "color") {
                 if (strs.size() < 4) return NULL;
                 try {
-                    return new ColorChangeCommand(Color(std::stoi(strs[1]), std::stoi(strs[2]), std::stoi(strs[3])));
+                    return new PixelChangeCommand(Pixel(std::stoi(strs[1]), std::stoi(strs[2]), std::stoi(strs[3])));
                 } catch (std::invalid_argument e) {
                     return NULL;
                 }
+            } else if (strs[0] == "text") {
+                return new AddTextCommand(command.substr(5));
             } else if (strs[0] == "draw") {
                 if (strs.size() < 2) return NULL;
                 if (strs[1] == "line") {
@@ -637,6 +901,9 @@ class Terminal {
                 if (strs[1] == "circle") {
                     if (strs.size() < 5) return NULL;
                     return new FillCircleCommand(Point<uint>(std::stoi(strs[2]), std::stoi(strs[3])), std::stoi(strs[4]));
+                } else if (strs[1] == "area") {
+                    if (strs.size() < 6) return NULL;
+                    return new FillAreaCommand(Point<uint>(std::stoi(strs[2]), std::stoi(strs[3])), Point<uint>(std::stoi(strs[4]), std::stoi(strs[5])));
                 }
             } else if (strs[0] == "save") {
                 if (strs.size() < 2) return NULL;
@@ -646,7 +913,7 @@ class Terminal {
         }
 
     public:
-        Terminal(Point<uint> pos, uint width, uint height, Color bg, Color fg) : pos{pos}, width{width}, height{height}, bg{bg}, fg{fg}, command{"Type / and then emter \"help\" for help"}
+        Terminal(Point<uint> pos, uint width, uint height, Pixel bg, Pixel fg) : pos{pos}, width{width}, height{height}, bg{bg}, fg{fg}, command{"Type / and then enter \"help\" for help"}
             {}
 
         void draw() {
@@ -715,12 +982,14 @@ struct Cursor {
     }
 };
 
-enum Action { ACT_NONE, ACT_DRAW_LINE, ACT_DRAW_CIRCLE, ACT_DRAW_BOUNDARY, ACT_FILL_CIRCLE, ACT_FILL_AREA };
+enum Action { ACT_NONE, ACT_DRAW_LINE, ACT_DRAW_CIRCLE, ACT_DRAW_BOUNDARY, ACT_DRAW_ELLIPSE, ACT_FILL_CIRCLE, ACT_FILL_ELLIPSE, ACT_FILL_AREA };
 
 class Drawer {
     private:
         static struct termios attributes;
+        static Drawer* d;
         Terminal term;
+        bool run;
 
         static void change_echo(bool on) {
             tcgetattr(STDIN_FILENO, &attributes);
@@ -737,36 +1006,93 @@ class Drawer {
         }
 
         static void sigint_handler(int signum) {
-            change_echo(true);
-            show_cursor(true);
-            std::exit(signum);
+            d->out.draw("Input the \"quit\" command to quit");
         }
 
     public:
         Canvas canvas;
         Cursor cursor;
-        Color curr_color;
+        Pixel curr_pixel;
         OutputTerminal out;
+        int rows;
+        int cols;
 
-        Drawer(uint width, uint height) : canvas(width, height), cursor(Point<int>(0,0), BASIC, width, height), term(Point<uint>(2 * width + 2, 0),  20, 20, Color::black, Color::green), out(Point<uint>(2 * width + 2, 25), 20, 20, Color::black, Color::green) {}
+        Drawer(uint width, uint height) :
+            canvas(width, height),
+            cursor(Point<int>(0,0), BASIC, width, height),
+            term(Point<uint>(2 * width + 2, 0),  20, 20, Pixel::black, Pixel::green),
+            out(Point<uint>(2 * width + 2, 25), 20, 20, Pixel::black, Pixel::green), run{true}
+        {
+            struct winsize w;
+            ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+            rows = w.ws_row;
+            cols = w.ws_col;
+
+            term = Terminal(Point<uint>(2 * width + 2, 0), cols - 2 * width - 2, height / 2, Pixel::black, Pixel::green);
+            out = OutputTerminal(Point<uint>(2 * width + 2, height / 2), cols - 2 * width - 2, height - height / 2, Pixel::white, Pixel::black);
+            cursor = Cursor(Point<int>(0,0), BASIC, width, height);
+        }
+
         Drawer(std::string filename) :
             canvas(filename),
             cursor(Point<int>(0,0), BASIC, canvas.get_width(), canvas.get_height()),
-            out(Point<uint>(2 * canvas.get_width() + 2, 25), 20, 20, Color::black, Color::green),
-            term(Point<uint>(2 * canvas.get_width() + 2, 0), 20, 20, Color::black, Color::green)
+            out(Point<uint>(2 * canvas.get_width() + 2, 25), 20, 20, Pixel::black, Pixel::green),
+            term(Point<uint>(2 * canvas.get_width() + 2, 0), 20, 20, Pixel::black, Pixel::green),
+            run{true}
         {
-            term = Terminal(Point<uint>(2 * canvas.get_width() + 2, 0), 20, 20, Color::black, Color::green);
-            out = OutputTerminal(Point<uint>(2 * canvas.get_width() + 2, 25), 20, 20, Color::black, Color::green);
-            cursor = Cursor(Point<int>(0,0), BASIC, canvas.get_width(), canvas.get_height());
+            struct winsize w;
+            ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+            rows = w.ws_row;
+            cols = w.ws_col;
+
+            uint width = canvas.get_width();
+            uint height = canvas.get_height();
+
+            term = Terminal(Point<uint>(2 * width + 2, 0), cols - 2 * width - 2, height / 2, Pixel::black, Pixel::green);
+            out = OutputTerminal(Point<uint>(2 * width + 2, height / 2), cols - 2 * width - 2, height - height / 2, Pixel::white, Pixel::black);
+            cursor = Cursor(Point<int>(0,0), BASIC, width, height);
+        }
+
+        void resize(uint width, uint height) {
+            canvas.resize(width, height);
+            term = Terminal(Point<uint>(2 * width + 2, 0), cols - 2 * width - 2, height / 2, Pixel::black, Pixel::green);
+            out = OutputTerminal(Point<uint>(2 * width + 2, height / 2), cols - 2 * width - 2, height - height / 2, Pixel::white, Pixel::black);
+            cursor = Cursor(Point<int>(0,0), BASIC, width, height);
+            draw_all();
+        }
+
+        void draw_all() {
+            std::cout << "\033[2J\033[H" << std::flush;
+            draw();
+            out.draw();
+            term.draw();
         }
 
         void draw() {
             canvas.draw();
-            std::print("{}\033[{};1H      \033[{};1H      \033[{};1H      ", curr_color.bg(), canvas.get_height() + 4, canvas.get_height() + 5, canvas.get_height() + 6);
+            std::string line(cols, ' ');
+            std::print("{}\033[{};1H{}\033[{};1H{}\033[{};1H{}", curr_pixel.bg(), canvas.get_height() + 2, line, canvas.get_height() + 3, line, canvas.get_height() + 4, line);
+        }
+
+        void quit() {
+            out.draw("Goodbye!");
+            run = false;
+        }
+
+        void undo(int times = 1) {
+            canvas.undo(times);
+            uint width = canvas.get_width();
+            uint height = canvas.get_height();
+            term = Terminal(Point<uint>(2 * width + 2, 0), cols - 2 * width - 2, height / 2, Pixel::black, Pixel::green);
+            out = OutputTerminal(Point<uint>(2 * width + 2, height / 2), cols - 2 * width - 2, height - height / 2, Pixel::white, Pixel::black);
+            cursor = Cursor(Point<int>(0,0), BASIC, width, height);
+            draw_all();
         }
 
         void main() {
+            Drawer::d = this;
             std::signal(SIGSEGV, Drawer::sigint_handler);
+            std::signal(SIGINT, Drawer::sigint_handler);
 
             change_echo(false);
             show_cursor(false);
@@ -779,31 +1105,33 @@ class Drawer {
             out.draw("");
             term.draw();
 
-            while (true) {
+            while (run) {
                 switch (act) {
                     case ACT_NONE: break;
                     case ACT_DRAW_LINE:
-                    case ACT_DRAW_BOUNDARY: canvas.draw_line(prev_point, cursor.get_pos(), Color::temp); break;
+                    case ACT_DRAW_BOUNDARY: canvas.draw_line(prev_point, cursor.get_pos(), Pixel::temp); break;
                     case ACT_FILL_CIRCLE:
-                    case ACT_DRAW_CIRCLE: canvas.draw_circle(prev_point, std::roundl(prev_point.distance(cursor.get_pos())), Color::temp); break;
+                    case ACT_DRAW_CIRCLE: canvas.draw_circle(prev_point, std::roundl(prev_point.distance(cursor.get_pos())), Pixel::temp); break;
+                    case ACT_FILL_ELLIPSE:
+                    case ACT_DRAW_ELLIPSE: canvas.draw_ellipse(prev_point, cursor.get_pos().x - prev_point.x, cursor.get_pos().y - prev_point.y, Pixel::temp); break;
                     case ACT_FILL_AREA: {
                         uint x1 = prev_point.x;
                         uint x2 = cursor.get_pos().x;
                         uint y1 = prev_point.y;
                         uint y2 = cursor.get_pos().y;
-                        canvas.draw_line(Point(x1,y1), Point(x2,y1), Color::temp);
-                        canvas.draw_line(Point(x2,y1), Point(x2,y2), Color::temp);
-                        canvas.draw_line(Point(x2,y2), Point(x1,y2), Color::temp);
-                        canvas.draw_line(Point(x1,y2), Point(x1,y1), Color::temp);
+                        canvas.draw_line(Point(x1,y1), Point(x2,y1), Pixel::temp);
+                        canvas.draw_line(Point(x2,y1), Point(x2,y2), Pixel::temp);
+                        canvas.draw_line(Point(x2,y2), Point(x1,y2), Pixel::temp);
+                        canvas.draw_line(Point(x1,y2), Point(x1,y1), Pixel::temp);
                         break;
                     }
                 }
 
                 draw();
 
-                const Color& on_color = canvas[cursor.pos.x, cursor.pos.y];
-                Color cursor_color = Color::black;
-                if (on_color.r + on_color.g + on_color.b < 383) cursor_color = Color::white;
+                const Pixel& on_color = canvas[cursor.pos.x, cursor.pos.y];
+                Pixel cursor_color = Pixel::black;
+                if (on_color.r + on_color.g + on_color.b < 383) cursor_color = Pixel::white;
                 std::print("\033[{};{}H{}{}{}\033[0m", cursor.pos.y + 1, 2 * cursor.pos.x + 1, on_color.bg(), cursor_color.fg(), cursor.to_string());
 
                 std::cin.get(c);
@@ -812,12 +1140,14 @@ class Drawer {
                     case 27: act = ACT_NONE; break;
                     case ' ': {
                         switch (act) {
-                            case ACT_NONE: canvas.point(curr_color, cursor.get_pos()); break;
-                            case ACT_DRAW_LINE: canvas.draw_line(prev_point, cursor.get_pos(), curr_color); break;
-                            case ACT_DRAW_CIRCLE: canvas.draw_circle(prev_point, std::roundl(prev_point.distance(cursor.get_pos())), curr_color); break;
+                            case ACT_NONE: canvas.point(curr_pixel, cursor.get_pos()); break;
+                            case ACT_DRAW_LINE: canvas.draw_line(prev_point, cursor.get_pos(), curr_pixel); break;
+                            case ACT_DRAW_CIRCLE: canvas.draw_circle(prev_point, std::roundl(prev_point.distance(cursor.get_pos())), curr_pixel); break;
                             case ACT_DRAW_BOUNDARY: canvas.draw_boundary_line(prev_point, cursor.get_pos()); break;
-                            case ACT_FILL_CIRCLE: canvas.fill_circle(prev_point, std::roundl(prev_point.distance(cursor.get_pos())), curr_color); break;
-                            case ACT_FILL_AREA: canvas.fill_area(prev_point, cursor.get_pos(), curr_color); break;
+                            case ACT_DRAW_ELLIPSE: canvas.draw_ellipse(prev_point, cursor.get_pos().x - prev_point.x, cursor.get_pos().y - prev_point.y, curr_pixel); break;
+                            case ACT_FILL_CIRCLE: canvas.fill_circle(prev_point, std::roundl(prev_point.distance(cursor.get_pos())), curr_pixel); break;
+                            case ACT_FILL_ELLIPSE: canvas.fill_ellipse(prev_point, cursor.get_pos().x - prev_point.x, cursor.get_pos().y - prev_point.y, curr_pixel); break;
+                            case ACT_FILL_AREA: canvas.fill_area(prev_point, cursor.get_pos(), curr_pixel); break;
                         }
                         act = ACT_NONE;
                         break;
@@ -831,6 +1161,7 @@ class Drawer {
                         Command* command = term.main();
                         if (command == NULL) break;
                         command->execute(*this);
+                        delete command;
                         break;
                     }
                     case 'l': {
@@ -858,7 +1189,17 @@ class Drawer {
                         act = ACT_FILL_AREA;
                         break;
                     }
-                    case 'f': canvas.fill_area(cursor.get_pos(), curr_color); break;
+                    case 'e': {
+                        prev_point = cursor.get_pos();
+                        act = ACT_DRAW_ELLIPSE;
+                        break;
+                    }
+                    case 'E': {
+                        prev_point = cursor.get_pos();
+                        act = ACT_FILL_ELLIPSE;
+                        break;
+                    }
+                    case 'f': canvas.fill_area(cursor.get_pos(), curr_pixel); break;
                     case '0': canvas.update_line(cursor.pos.y); cursor.pos.x = 0; break;
                     case '$': canvas.update_line(cursor.pos.y); cursor.pos.x = canvas.get_width() - 1; break;
                     case 'g': canvas.update_line(cursor.pos.y); cursor.pos.y = 0; break;
@@ -868,10 +1209,40 @@ class Drawer {
             }
 
             show_cursor(true);
+            change_echo(true);
         }
 };
 
 struct termios Drawer::attributes;
+Drawer* Drawer::d;
+
+void QuitCommand::execute(Drawer& d) {
+    d.quit();
+}
+
+void HelpCommand::execute(Drawer& d) {
+    std::string help_msg;
+    std::string line;
+    std::ifstream help_file;
+
+    help_file.open(fname);
+    while(!help_file.eof()) {
+        std::getline(help_file, line);
+        help_msg += line + '\n';
+    }
+    help_file.close();
+
+    d.out.draw(help_msg);
+}
+
+void ResizeCommand::execute(Drawer& d) {
+    if (width < 4 || height < 4) return;
+    d.resize(width, height);
+}
+
+void ScrollCommand::execute(Drawer& d) {
+    d.out.move(dy);
+}
 
 void CursorCommand::execute(Drawer& d) {
     if (0 <= x && x < d.canvas.get_width() && 0 <= y && y < d.canvas.get_height()) {
@@ -908,14 +1279,14 @@ void OutputCommand::execute(Drawer& d) {
 }
 
 void UndoCommand::execute(Drawer& d) {
-    d.canvas.undo(times);
+    d.undo(times);
 }
 
 std::string OutputCommand::get_var(std::string varname, Drawer& d) {
     if (varname == "cursor")
         return std::format("({}, {})", d.cursor.pos.x, d.cursor.pos.y);
     else if (varname == "color") {
-        const Color& c = d.canvas[d.cursor.pos.x, d.cursor.pos.y];
+        const Pixel& c = d.canvas[d.cursor.pos.x, d.cursor.pos.y];
         return std::format("rgb({}, {}, {})", c.r, c.g, c.b);
     } else if (varname == "dimensions")
         return std::format("{}x{}", d.canvas.get_width(), d.canvas.get_height());
@@ -926,13 +1297,17 @@ std::string OutputCommand::get_var(std::string varname, Drawer& d) {
     return "";   
 }
 
-void ColorChangeCommand::execute(Drawer& d) {
-    d.curr_color = c;
+void PixelChangeCommand::execute(Drawer& d) {
+    d.curr_pixel = c;
+}
+
+void AddTextCommand::execute(Drawer& d) {
+    d.canvas.add_text(Point<uint>(d.cursor.pos.x, d.cursor.pos.y), text, d.curr_pixel.r, d.curr_pixel.g, d.curr_pixel.b);
 }
 
 void DrawLineCommand::execute(Drawer& d) {
     try {
-        d.canvas.draw_line(b, e, d.curr_color);
+        d.canvas.draw_line(b, e, d.curr_pixel);
     } catch (std::invalid_argument e) {}
 }
 
@@ -944,23 +1319,85 @@ void DrawBoundaryLineCommand::execute(Drawer& d) {
 
 void DrawCircleCommand::execute(Drawer& d) {
     try {
-        d.canvas.draw_circle(p, r, d.curr_color);
+        d.canvas.draw_circle(p, r, d.curr_pixel);
     } catch (std::invalid_argument e) {}
 }
 
 void FillCircleCommand::execute(Drawer& d) {
     try {
-        d.canvas.fill_circle(p, r, d.curr_color);
+        d.canvas.fill_circle(p, r, d.curr_pixel);
+    } catch (std::invalid_argument e) {}
+}
+
+void FillAreaCommand::execute(Drawer& d) {
+    try {
+        d.canvas.fill_area(p1, p2, d.curr_pixel);
     } catch (std::invalid_argument e) {}
 }
 
 void SaveCommand::execute(Drawer& d) {
     d.canvas.save(filename);
+    d.out.draw(std::format("Saved to {}!", filename));
 }
 
-int main() {
-    Drawer d("test.out");
-    //Drawer d(30,30);
-    d.main();
+int main(int argc, char** argv) {
+    uint width = -1;
+    uint height = -1;
+    std::string fname;
+
+    int i = 1;
+    while (i < argc) {
+        std::string arg(argv[i]);
+        if (arg.rfind("--", 0) != 0) {
+            std::print("Invalid flag {} (must begin with --)\n", arg);
+            std::exit(1);
+        }
+
+        arg = arg.substr(2);
+        if (arg == "dimens") {
+            if (argc < i+3) {
+                std::print("Must provide dimensions\n");
+                std::exit(1);
+            }
+            width = std::stoi(argv[i+1]);
+            height = std::stoi(argv[i+2]);
+            i += 3;
+        } else if (arg == "file") {
+            if (argc < i+2) {
+                std::print("Must provide filename\n");
+                std::exit(1);
+            }
+            fname = argv[i+1];
+            i += 2;
+        } else if (arg == "help") {
+            std::ifstream help_file;
+            help_file.open("help.txt");
+
+            std::string line;
+            while (!help_file.eof()) {
+                std::getline(help_file, line);
+                std::cout << line << std::endl;
+            }
+
+            help_file.close();
+            i++;
+        } else {
+            std::print("Invalid flag {}\n", arg);
+            std::exit(1);
+        }
+    }
+
+    Drawer* d = NULL;
+
+    if (width != -1 && height != -1) {
+        d = new Drawer(width, height);
+    } else if (fname != "") {
+        d = new Drawer(fname);
+    }
+
+    if (d != NULL) {
+        d->main();
+        delete d;
+    }
 }
 

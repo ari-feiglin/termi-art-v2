@@ -1,0 +1,26 @@
+quit: quits the program.
+help [<option>]:
+    help: prints help on the editor.
+    help terminal: prints this help message on the terminal.
+resize <width> <height>: resizes the editor to <width> x <height>
+scroll <number>: scrolls up/down <number> lines in the output window.
+print <string>: prints <string> in the output window, words beginning with $ are expanded as variables.
+    These are:
+    $cursor: the cursor position.
+    $color: the color under the cursor.
+    $dimensions: the dimensions of the canvas.
+    $version: the current version of termiart.
+    $credits: credits.
+undo [<times>]: undoes the past <times> actions (if empty, then 1).
+cursor [<x> <y>]: if <x> <y> is empty then prints the cursor position.
+    Otherwise, sets the cursor position to (<x>,<y>).
+color <r> <g> <b>: sets the current color to rgb(<r>,<g>,<b>).
+text <text>: adds text in the current color to the current position in the canvas.
+draw <shape> [...]:
+    draw line <x1> <y1> <x2> <y2>: draws a line from (<x1>, <y1>) to (<x2>, <y2>).
+    draw circle <x> <y> <r>: draws a circle of radius <r> around (<x>, <y>).
+    draw boundary <x1> <y1> <x2> <y2>: draws a boundary line from (<x1>, <y1>) to (<x2>, <y2>).
+fill <shape> [...]:
+    fill circle <x> <y> <r>: fills in a circle of radius <r> around (<x>, <y>).
+    fill area <x1> <y1> <x2> <y2>: fills the rectangular area between (<x1>, <y1>) and (<x2>, <y2>)
+save <filename>: saves the current canvas in a file of the name <filename>.

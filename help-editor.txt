@@ -1,0 +1,16 @@
+Navigation: using 'w', 'a', 's', 'd'
+    '0': goto first column
+    '$': goto last column
+    'g': goto first row
+    'G': goto last row
+Access terminal: '/'
+    enter "help terminal" for terminal help
+Draw: ' ' (space) -- this will draw a point or finish the current shape.
+Begin line: 'l'
+Begin circle: 'c'
+Begin ellipse: 'e'
+Begin circle fill: 'C'
+Begin ellipse fill: 'E'
+Begin boundary line: 'b'
+Fill boundary lines: 'F' (warning: does not work)
+Begin fill area: 'f'

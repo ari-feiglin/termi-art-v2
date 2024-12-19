@@ -1,0 +1,10 @@
+Welcome to TermiArt!
+
+Usage: ./termiart [--help] [--dimens <width> <height>] [--file <filename>]
+
+Flags:
+    --help: print this help message.
+    --dimens <width> <height>: create a new pixel art of the given dimensions.
+    --file <filename>: load a pixel art from <filename>
+
+For help with commands within the editor, go to the editor's terminal (press '/') and enter "help".
