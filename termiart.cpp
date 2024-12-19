@@ -1381,6 +1381,16 @@ int main(int argc, char** argv) {
 
             help_file.close();
             i++;
+        } else if (arg == "display") {
+            if (argc < i + 2) {
+                std::print("Must provide filename\n");
+                std::exit(1);
+            }
+            std::cout << "\033[2J\033[H" << std::flush;
+            Canvas canvas(argv[i + 1]);
+            canvas.draw();
+            std::cout << std::endl << std::endl;
+            std::exit(0);
         } else {
             std::print("Invalid flag {}\n", arg);
             std::exit(1);
