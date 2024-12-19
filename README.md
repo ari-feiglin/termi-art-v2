@@ -1,7 +1,7 @@
 # TermiArt v0.0.1
 ## pixel art in your terminal
 
-![TermiArt Logo](termi-logo.png)
+![TermiArt Logo](tart-logo.png)
 
 ## Introduction and Dependencies
 
