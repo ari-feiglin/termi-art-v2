@@ -14,3 +14,4 @@ Begin ellipse fill: 'E'
 Begin boundary line: 'b'
 Fill boundary lines: 'F' (warning: does not work)
 Begin fill area: 'f'
+Begin move area: 'm' (space to end move area, then space to move to current point)

@@ -12,7 +12,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-std::string version_no = "v0.0.1";
+std::string version_no = "v0.0.2";
 
 typedef unsigned char uchar;
 typedef unsigned int uint;
@@ -65,7 +65,7 @@ struct Point {
     }
 };
 
-enum PixelCode { NONE = 0, BOUNDARY = 1, TEMP = 2 };
+enum PixelCode { NONE, TRANSPARENT, BOUNDARY, TEMP };
 
 struct Pixel {
     static Pixel white;
@@ -74,21 +74,23 @@ struct Pixel {
     static Pixel blue;
     static Pixel green;
     static Pixel temp;
+    static Pixel transparent;
 
     uchar r;
     uchar g;
     uchar b;
 
     PixelCode code;
+    PixelCode prev_code;
     uchar fg_r;
     uchar fg_g;
     uchar fg_b;
     std::string text;
 
-    Pixel() : r{255}, g{255}, b{255}, code{NONE}, text{"  "} {}
-    Pixel(uchar r, uchar g, uchar b, uchar fg_r = 0, uchar fg_g = 0, uchar fg_b = 0, std::string text = "  ", PixelCode code = NONE) : r{r}, g{g}, b{b}, fg_r{fg_r}, fg_g{fg_g}, fg_b{fg_b}, code{code}, text{text} {}
-    Pixel(const Pixel& c) : r{c.r}, g{c.g}, b{c.b}, fg_r{c.fg_r}, fg_g{c.fg_g}, fg_b{c.fg_b}, code{c.code}, text{c.text} {}
-    Pixel(Pixel&& c) : r{c.r}, g{c.g}, b{c.b}, fg_r{c.fg_r}, fg_g{c.fg_g}, fg_b{c.fg_b}, code{c.code}, text{c.text} {}
+    Pixel() : r{255}, g{255}, b{255}, code{TRANSPARENT}, prev_code{TRANSPARENT}, text{"  "} {}
+    Pixel(uchar r, uchar g, uchar b, uchar fg_r = 0, uchar fg_g = 0, uchar fg_b = 0, std::string text = "  ", PixelCode code = NONE) : r{r}, g{g}, b{b}, fg_r{fg_r}, fg_g{fg_g}, fg_b{fg_b}, code{code}, prev_code{code}, text{text} {}
+    Pixel(const Pixel& c) : r{c.r}, g{c.g}, b{c.b}, fg_r{c.fg_r}, fg_g{c.fg_g}, fg_b{c.fg_b}, code{c.code}, prev_code{c.prev_code}, text{c.text} {}
+    Pixel(Pixel&& c) : r{c.r}, g{c.g}, b{c.b}, fg_r{c.fg_r}, fg_g{c.fg_g}, fg_b{c.fg_b}, code{c.code}, prev_code{c.prev_code}, text{c.text} {}
     Pixel& operator=(const Pixel& c) {
         if (c.code == TEMP) {
             code = TEMP;
@@ -98,6 +100,7 @@ struct Pixel {
         g = c.g;
         b = c.b;
         code = c.code;
+        prev_code = c.prev_code;
         fg_r = c.fg_r;
         fg_g = c.fg_g;
         fg_b = c.fg_b;
@@ -113,6 +116,7 @@ struct Pixel {
         g = std::move(c.g);
         b = std::move(c.b);
         code = std::move(c.code);
+        prev_code = std::move(c.prev_code);
         fg_r = std::move(c.fg_r);
         fg_g = std::move(c.fg_g);
         fg_b = std::move(c.fg_b);
@@ -132,6 +136,7 @@ struct Pixel {
     }
 
     Pixel& set_code(PixelCode code) {
+        this->prev_code = this->code;
         this->code = code;
         return *this;
     }
@@ -151,6 +156,7 @@ Pixel Pixel::red(255,0,0);
 Pixel Pixel::green(0,255,0);
 Pixel Pixel::blue(0,0,255);
 Pixel Pixel::temp(0,0,0,0,0,0,"  ",TEMP);
+Pixel Pixel::transparent(0,0,0,0,0,0,"  ",TRANSPARENT);
 
 class Canvas {
     private:
@@ -246,7 +252,7 @@ class Canvas {
                 for (int j = 0; j < height; j++) {
                     Pixel& c = canvas[j * width + i];
                     if (c.code == TEMP) {
-                        c.code = NONE;
+                        c.code = c.prev_code;
                         update_lines.insert(j);
                     }
                 }
@@ -254,7 +260,7 @@ class Canvas {
         }
 
     public:
-        Canvas(uint width, uint height, Pixel bg = Pixel::white) : width{width}, height{height} {
+        Canvas(uint width, uint height, Pixel bg = Pixel::transparent) : width{width}, height{height} {
             canvas = new Pixel[width * height];
             for (int i = 0; i < width * height; i++) canvas[i] = bg;
             for (int i = 0; i < height; i++) update_lines.insert(i);
@@ -262,6 +268,7 @@ class Canvas {
 
         Canvas(std::string filename) {
             std::ifstream input_file;
+            input_file.exceptions(std::ifstream::failbit | std::ifstream::badbit);
             input_file.open(filename, std::ios::binary | std::ios::in);
 
             std::string vno;
@@ -281,6 +288,7 @@ class Canvas {
             canvas = new Pixel[width * height];
 
             uchar r,g,b,fg_r,fg_g,fg_b;
+            PixelCode code;
             char buf[3] = {0};
 
             for (int i = 0; i < width * height; i++) {
@@ -290,8 +298,9 @@ class Canvas {
                 input_file.read(reinterpret_cast<char*>(&fg_r), 1);
                 input_file.read(reinterpret_cast<char*>(&fg_g), 1);
                 input_file.read(reinterpret_cast<char*>(&fg_b), 1);
+                input_file.read(reinterpret_cast<char*>(&code), sizeof(code));
                 input_file.read(buf, 2);
-                canvas[i] = Pixel(r,g,b,fg_r,fg_g,fg_b,std::string(buf));
+                canvas[i] = Pixel(r,g,b,fg_r,fg_g,fg_b,std::string(buf),code);
             }
 
             for (int i = 0; i < height; i++) update_lines.insert(i);
@@ -316,6 +325,7 @@ class Canvas {
 
             for (int i = 0; i < width * height; i++) {
                 output_file << canvas[i].r << canvas[i].g << canvas[i].b << canvas[i].fg_r << canvas[i].fg_g << canvas[i].fg_b;
+                output_file.write(reinterpret_cast<char*>(&canvas[i].code), sizeof(canvas[i].code));
                 output_file.write(canvas[i].text.c_str(), 2);
             }
 
@@ -329,25 +339,27 @@ class Canvas {
         }
 
         void undo(int times = 1) {
-            bool flag = false;
             CanvasHolder holder(NULL, 0,0);
 
             for (int i = 0; i < height; i++) update_lines.insert(i);
 
             for (int i = 0; i < times; i++) {
                 if (past_canvases.empty()) break;
-                flag = true;
-                delete[] canvas;
+                if (holder.canvas != NULL)
+                    delete[] holder.canvas;
                 holder = past_canvases.back();
                 past_canvases.pop_back();
             }
 
-            if (!flag) return;
+            if (holder.canvas == NULL) return;
 
+            delete[] canvas;
             width = holder.width;
             height = holder.height;
             canvas = holder.canvas;
 
+            update_lines.clear();
+            for (int i = 0; i < height; i++) update_lines.insert(i);
         }
 
         void resize(uint width, uint height) {
@@ -381,6 +393,17 @@ class Canvas {
             update_lines.insert(p.y);
         }
 
+        void draw_rectange(Point<uint> start, Point<uint> end, Pixel c) {
+            uint x1 = start.x;
+            uint x2 = end.x;
+            uint y1 = start.y;
+            uint y2 = end.y;
+            draw_line(Point(x1,y1), Point(x2,y1), Pixel::temp);
+            draw_line(Point(x2,y1), Point(x2,y2), Pixel::temp);
+            draw_line(Point(x2,y2), Point(x1,y2), Pixel::temp);
+            draw_line(Point(x1,y2), Point(x1,y1), Pixel::temp);
+        }
+
         void fill_area(Point<uint> start, Point<uint> end, Pixel c) {
             check_point(start);
             check_point(end);
@@ -407,6 +430,127 @@ class Canvas {
             }
         }
 
+        void move(Point<uint> start, Point<uint> end, Point<uint> dest) {
+            check_point(start);
+            check_point(end);
+            check_point(dest);
+
+            save_old();
+
+            Point<uint> b = Point<uint>(std::min(start.x, end.x), std::min(start.y, end.y));
+            Point<uint> e = Point<uint>(std::max(start.x, end.x), std::max(start.y, end.y));
+
+            Pixel* new_canvas = new Pixel[width * height];
+            for (int i = 0; i < width * height; i++) new_canvas[i] = canvas[i];
+
+            for (int i = b.y; i <= e.y; i++) {
+                update_lines.insert(i);
+                for (int j = b.x; j <= e.x; j++)
+                    new_canvas[i * width + j] = Pixel();
+            }
+
+            int dy = e.y - b.y + 1;
+            int dx = e.x - b.x + 1;
+            for (int i = 0; i < std::min(dy, (int)height - (int)dest.y); i++) {
+                update_lines.insert(dest.y + i);
+                for (int j = 0; j < std::min(dx, (int)width - (int)dest.x); j++) {
+                    new_canvas[(dest.y + i) * width + dest.x + j] = canvas[(b.y + i) * width + b.x + j];
+                }
+            }
+
+            delete[] canvas;
+            canvas = new_canvas;
+        }
+
+        void insert_art(std::string filename, Point<uint> dest) {
+            Canvas art(filename);
+
+            uint art_width = art.get_width();
+            uint art_height = art.get_height();
+
+            save_old();
+
+            for (int i = dest.y; i < dest.y + art_height && i < height; i++) {
+                update_lines.insert(i);
+                for (int j = dest.x; j < dest.x + art_width && j < width; j++) {
+                    Pixel& c = art.canvas[(i - dest.y) * art_width + j - dest.x];
+                    if (c.code == TRANSPARENT) continue;
+                    canvas[i * width + j] = c;
+                }
+            }
+        }
+
+        void blur(uint x_reduction, uint y_reduction) {
+            save_old();
+
+            uint width = this->width / x_reduction;
+            uint height = this->height / y_reduction;
+            Pixel* new_canvas = new Pixel[width * height];
+            uint r,g,b;
+            uint count;
+            bool is_trans;
+
+            update_lines.clear();
+
+            for (int i = 0; i < height; i++) {
+                update_lines.insert(i);
+                for (int j = 0; j < width; j++) {
+                    r = 0;
+                    g = 0;
+                    b = 0;
+                    count = 0;
+                    is_trans = true;
+
+                    for (int k = i * y_reduction; k < i * y_reduction + y_reduction && k < this->height; k++) {
+                        for (int l = j * x_reduction; l < j * x_reduction + x_reduction && l < this->width; l++) {
+                            Pixel& c = canvas[k * this->width + l];
+                            if (c.code != TRANSPARENT) {
+                                is_trans = false;
+                                r += c.r;
+                                g += c.g;
+                                b += c.b;
+                                count++;
+                            }
+                        }
+                    }
+
+                    if (is_trans) new_canvas[i * width + j] = Pixel::transparent;
+                    else new_canvas[i * width + j] = Pixel(r / count, g / count, b / count);
+                }
+            }
+
+            delete[] canvas;
+            this->width = width;
+            this->height = height;
+            canvas = new_canvas;
+        }
+
+        void display() {
+            for (const int& i : update_lines) {
+                std::string line;
+                for (int j = 0; j < width; j++) {
+                    const Pixel& c = canvas[i * width + j];
+                    Pixel r = c.get_reverse();
+                    switch (c.code) {
+                        case NONE: {
+                            std::string t = c.text.substr(0,2);
+                            if (t == "  ")
+                                line += std::format("\033[48;2;{};{};{}m\033[38;2;{};{};{}m{}", c.r, c.g, c.b, r.r, r.g, r.b, t);
+                            else
+                                line += std::format("\033[48;2;{};{};{}m\033[38;2;{};{};{}m{}", c.r, c.g, c.b, c.fg_r, c.fg_g, c.fg_b, t);
+                            break;
+                        }
+                        case TRANSPARENT: line += "\033[0m  "; break;
+                        case BOUNDARY: line += std::format("\033[48;2;{};{};{}m\033[38;2;{};{};{}m::", c.r, c.g, c.b, r.r, r.g, r.b); break;
+                        case TEMP: line += "\033[48;2;255;255;255m\033[38;0;0;0m##"; break;
+                        default: line += "  "; break;
+                    }
+                }
+
+                std::print("\033[{};{}H{}", i + 1, 1, line);
+            }
+        }
+
         void draw() {
             for (const int& i : update_lines) {
                 std::string line;
@@ -422,6 +566,7 @@ class Canvas {
                                 line += std::format("\033[48;2;{};{};{}m\033[38;2;{};{};{}m{}", c.r, c.g, c.b, c.fg_r, c.fg_g, c.fg_b, t);
                             break;
                         }
+                        case TRANSPARENT: line += "\033[0m\033[38;2;255;255;255m.."; break;
                         case BOUNDARY: line += std::format("\033[48;2;{};{};{}m\033[38;2;{};{};{}m::", c.r, c.g, c.b, r.r, r.g, r.b); break;
                         case TEMP: line += "\033[48;2;255;255;255m\033[38;0;0;0m##"; break;
                         default: line += "  "; break;
@@ -476,6 +621,18 @@ class Canvas {
             }
 
             if (c.code != TEMP) reset_temp();
+        }
+
+        void fill_bg(Pixel c) {
+            save_old();
+
+            for (int i = 0; i < height; i++) {
+                update_lines.insert(i);
+                for (int j = 0; j < width; j++) {
+                    Pixel& curr = canvas[i * width + j];
+                    if (curr.code == TRANSPARENT) curr = c;
+                }
+            }
         }
 
         void fill_area(Point<uint> p, Pixel c) {
@@ -594,7 +751,7 @@ class Canvas {
             double r22 = r2 * r2;
 
             for (int i = 0; i < height; i++) {
-                for (int j = 0; j <= p.x; j++) {
+                for (int j = 0; j <= width; j++) {
                     Point<double> diffs[] = {Point<double>(-.5,.5), Point<double>(.5,.5), Point<double>(.5,-.5), Point<double>(-.5,-.5)};
                     double vals[] = {0,0,0,0};
                     for (int k = 0; k < 4; k++) {
@@ -625,8 +782,13 @@ class Canvas {
                     }
 
                     if (flag) {
-                        for (int k = j; k <= 2 * p.x - j; k++)
-                            canvas[i * width + k] = c;
+                        if (j <= p.x) {
+                            for (int k = j; k <= 2 * p.x - j; k++)
+                                canvas[i * width + k] = c;
+                        } else {
+                            for (int k = j; k >= 2 * (int)p.x - j && k >= 0; k--)
+                                canvas[i * width + k] = c;
+                        }
                         update_lines.insert(i);
                     }
                 }
@@ -640,16 +802,20 @@ class Canvas {
 
             save_old();
 
-            for (int i = 0; i <= p.x; i++) {
+            for (int i = 0; i < width; i++) {
                 for (int j = 0; j < height; j++) {
                     int dx = i - p.x;
                     int dy = j - p.y;
                     int a = dx * dx + dy * dy;
                     int r2 = r * r;
                     if (r2 - r <= a && a <= r2 + r) {
-                        for (int k = i; k <= 2 * p.x - i; k++) {
-                            canvas[j * width + k] = c;
-                            update_lines.insert(j);
+                        update_lines.insert(j);
+                        if (i <= p.x) {
+                            for (int k = i; k <= 2 * p.x - i; k++)
+                                canvas[j * width + k] = c;
+                        } else {
+                            for (int k = i; k >= 2 * (int)p.x - i && k >= 0; k--)
+                                canvas[j * width + k] = c;
                         }
                     }
                 }
@@ -752,6 +918,33 @@ struct FillAreaCommand : public Command {
     Point<uint> p1;
     Point<uint> p2;
     FillAreaCommand(Point<uint> p1, Point<uint> p2) : p1{p1}, p2{p2} {}
+    void execute(Drawer& d) override;
+};
+
+struct FillBGCommand : public Command {
+    FillBGCommand() {}
+    void execute(Drawer& d) override;
+};
+
+struct MoveCommand : public Command {
+    Point<uint> p1;
+    Point<uint> p2;
+    Point<uint> p3;
+    MoveCommand(uint x1, uint y1, uint x2, uint y2, uint x3, uint y3) :
+        p1(x1,y1), p2(x2,y2), p3(x3,y3) {}
+    void execute(Drawer& d) override;
+};
+
+struct BlurCommand : public Command {
+    uint x_reduction;
+    uint y_reduction;
+    BlurCommand(uint x_reduction, uint y_reduction) : x_reduction{x_reduction}, y_reduction{y_reduction} {}
+    void execute(Drawer& d) override;
+};
+
+struct InsertCommand : public Command {
+    std::string filename;
+    InsertCommand(std::string filename) : filename{filename} {}
     void execute(Drawer& d) override;
 };
 
@@ -876,6 +1069,8 @@ class Terminal {
                 else if (strs.size() == 3)
                     return new CursorCommand(std::stoi(strs[1]), std::stoi(strs[2]));
             } else if (strs[0] == "color") {
+                if (strs.size() < 2) return NULL;
+                if (strs[1] == "transparent") return new PixelChangeCommand(Pixel::transparent);
                 if (strs.size() < 4) return NULL;
                 try {
                     return new PixelChangeCommand(Pixel(std::stoi(strs[1]), std::stoi(strs[2]), std::stoi(strs[3])));
@@ -904,7 +1099,16 @@ class Terminal {
                 } else if (strs[1] == "area") {
                     if (strs.size() < 6) return NULL;
                     return new FillAreaCommand(Point<uint>(std::stoi(strs[2]), std::stoi(strs[3])), Point<uint>(std::stoi(strs[4]), std::stoi(strs[5])));
-                }
+                } else if (strs[1] == "bg") return new FillBGCommand();
+            } else if (strs[0] == "move") {
+                if (strs.size() < 7) return NULL;
+                return new MoveCommand(std::stoi(strs[1]), std::stoi(strs[2]), std::stoi(strs[3]), std::stoi(strs[4]), std::stoi(strs[5]), std::stoi(strs[6])); 
+            } else if (strs[0] == "blur") {
+                if (strs.size() < 3) return NULL;
+                return new BlurCommand(std::stoi(strs[1]), std::stoi(strs[2]));
+            } else if (strs[0] == "insert") {
+                if (strs.size() < 2) return NULL;
+                return new InsertCommand(command.substr(7));
             } else if (strs[0] == "save") {
                 if (strs.size() < 2) return NULL;
                 return new SaveCommand(strs[1]);
@@ -982,7 +1186,7 @@ struct Cursor {
     }
 };
 
-enum Action { ACT_NONE, ACT_DRAW_LINE, ACT_DRAW_CIRCLE, ACT_DRAW_BOUNDARY, ACT_DRAW_ELLIPSE, ACT_FILL_CIRCLE, ACT_FILL_ELLIPSE, ACT_FILL_AREA };
+enum Action { ACT_NONE, ACT_DRAW_LINE, ACT_DRAW_CIRCLE, ACT_DRAW_BOUNDARY, ACT_DRAW_ELLIPSE, ACT_FILL_CIRCLE, ACT_FILL_ELLIPSE, ACT_FILL_AREA, ACT_GET_MOVE_AREA, ACT_GET_MOVE_DEST };
 
 class Drawer {
     private:
@@ -1074,6 +1278,16 @@ class Drawer {
             std::print("{}\033[{};1H{}\033[{};1H{}\033[{};1H{}", curr_pixel.bg(), canvas.get_height() + 2, line, canvas.get_height() + 3, line, canvas.get_height() + 4, line);
         }
 
+        void blur(uint x_reduction, uint y_reduction) {
+            canvas.blur(x_reduction, y_reduction);
+            uint width = canvas.get_width();
+            uint height = canvas.get_height();
+            term = Terminal(Point<uint>(2 * width + 2, 0), cols - 2 * width - 2, height / 2, Pixel::black, Pixel::green);
+            out = OutputTerminal(Point<uint>(2 * width + 2, height / 2), cols - 2 * width - 2, height - height / 2, Pixel::white, Pixel::black);
+            cursor = Cursor(Point<int>(0,0), BASIC, width, height);
+            draw_all();
+        }
+
         void quit() {
             out.draw("Goodbye!");
             run = false;
@@ -1101,6 +1315,9 @@ class Drawer {
             char c;
             Action act = ACT_NONE;
             Point<uint> prev_point(0,0);
+            Point<uint> pprev_point(0,0);
+
+            curr_pixel = Pixel::white;
 
             out.draw("");
             term.draw();
@@ -1114,17 +1331,9 @@ class Drawer {
                     case ACT_DRAW_CIRCLE: canvas.draw_circle(prev_point, std::roundl(prev_point.distance(cursor.get_pos())), Pixel::temp); break;
                     case ACT_FILL_ELLIPSE:
                     case ACT_DRAW_ELLIPSE: canvas.draw_ellipse(prev_point, cursor.get_pos().x - prev_point.x, cursor.get_pos().y - prev_point.y, Pixel::temp); break;
-                    case ACT_FILL_AREA: {
-                        uint x1 = prev_point.x;
-                        uint x2 = cursor.get_pos().x;
-                        uint y1 = prev_point.y;
-                        uint y2 = cursor.get_pos().y;
-                        canvas.draw_line(Point(x1,y1), Point(x2,y1), Pixel::temp);
-                        canvas.draw_line(Point(x2,y1), Point(x2,y2), Pixel::temp);
-                        canvas.draw_line(Point(x2,y2), Point(x1,y2), Pixel::temp);
-                        canvas.draw_line(Point(x1,y2), Point(x1,y1), Pixel::temp);
-                        break;
-                    }
+                    case ACT_GET_MOVE_AREA:
+                    case ACT_FILL_AREA: canvas.draw_rectange(prev_point, cursor.get_pos(), Pixel::temp); break;
+                    case ACT_GET_MOVE_DEST: canvas.draw_rectange(prev_point, pprev_point, Pixel::temp); break;
                 }
 
                 draw();
@@ -1148,8 +1357,11 @@ class Drawer {
                             case ACT_FILL_CIRCLE: canvas.fill_circle(prev_point, std::roundl(prev_point.distance(cursor.get_pos())), curr_pixel); break;
                             case ACT_FILL_ELLIPSE: canvas.fill_ellipse(prev_point, cursor.get_pos().x - prev_point.x, cursor.get_pos().y - prev_point.y, curr_pixel); break;
                             case ACT_FILL_AREA: canvas.fill_area(prev_point, cursor.get_pos(), curr_pixel); break;
+                            case ACT_GET_MOVE_AREA: pprev_point = cursor.get_pos(); break;
+                            case ACT_GET_MOVE_DEST: canvas.move(prev_point, pprev_point, cursor.get_pos()); break;
                         }
-                        act = ACT_NONE;
+                        if (act == ACT_GET_MOVE_AREA) act = ACT_GET_MOVE_DEST;
+                        else act = ACT_NONE;
                         break;
                     }
                     case 'w': canvas.update_line(cursor.pos.y); cursor.move_y(-1); break;
@@ -1158,10 +1370,12 @@ class Drawer {
                     case 'd': canvas.update_line(cursor.pos.y); cursor.move_x(1); break;
                     case '/': {
                         term.clear();
-                        Command* command = term.main();
-                        if (command == NULL) break;
-                        command->execute(*this);
-                        delete command;
+                        try {
+                            Command* command = term.main();
+                            if (command == NULL) break;
+                            command->execute(*this);
+                            delete command;
+                        } catch (std::invalid_argument e) {}
                         break;
                     }
                     case 'l': {
@@ -1197,6 +1411,11 @@ class Drawer {
                     case 'E': {
                         prev_point = cursor.get_pos();
                         act = ACT_FILL_ELLIPSE;
+                        break;
+                    }
+                    case 'm': {
+                        prev_point = cursor.get_pos();
+                        act = ACT_GET_MOVE_AREA;
                         break;
                     }
                     case 'f': canvas.fill_area(cursor.get_pos(), curr_pixel); break;
@@ -1335,6 +1554,28 @@ void FillAreaCommand::execute(Drawer& d) {
     } catch (std::invalid_argument e) {}
 }
 
+void FillBGCommand::execute(Drawer& d) {
+    d.canvas.fill_bg(d.curr_pixel);
+}
+
+void MoveCommand::execute(Drawer& d) {
+    try {
+        d.canvas.move(p1, p2, p3);
+    } catch (std::invalid_argument e) {}
+}
+
+void BlurCommand::execute(Drawer& d) {
+    d.blur(x_reduction, y_reduction);
+}
+
+void InsertCommand::execute(Drawer& d) {
+    try {
+        d.canvas.insert_art(filename, d.cursor.get_pos());
+    } catch (std::ifstream::failure e) {
+        d.out.draw(std::format("Failed to read from file {}", filename));
+    }
+}
+
 void SaveCommand::execute(Drawer& d) {
     d.canvas.save(filename);
     d.out.draw(std::format("Saved to {}!", filename));
@@ -1388,7 +1629,7 @@ int main(int argc, char** argv) {
             }
             std::cout << "\033[2J\033[H" << std::flush;
             Canvas canvas(argv[i + 1]);
-            canvas.draw();
+            canvas.display();
             std::cout << std::endl << std::endl;
             std::exit(0);
         } else {

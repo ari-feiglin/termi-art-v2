@@ -14,7 +14,9 @@ print <string>: prints <string> in the output window, words beginning with $ are
 undo [<times>]: undoes the past <times> actions (if empty, then 1).
 cursor [<x> <y>]: if <x> <y> is empty then prints the cursor position.
     Otherwise, sets the cursor position to (<x>,<y>).
-color <r> <g> <b>: sets the current color to rgb(<r>,<g>,<b>).
+color [<r> <g> <b>] [transparent]:
+    color <r> <g> <b>: sets the current color to rgb(<r>,<g>,<b>).
+    color transparent: sets the current color to transparent.
 text <text>: adds text in the current color to the current position in the canvas.
 draw <shape> [...]:
     draw line <x1> <y1> <x2> <y2>: draws a line from (<x1>, <y1>) to (<x2>, <y2>).
@@ -22,5 +24,8 @@ draw <shape> [...]:
     draw boundary <x1> <y1> <x2> <y2>: draws a boundary line from (<x1>, <y1>) to (<x2>, <y2>).
 fill <shape> [...]:
     fill circle <x> <y> <r>: fills in a circle of radius <r> around (<x>, <y>).
-    fill area <x1> <y1> <x2> <y2>: fills the rectangular area between (<x1>, <y1>) and (<x2>, <y2>)
+    fill area <x1> <y1> <x2> <y2>: fills the rectangular area between (<x1>, <y1>) and (<x2>, <y2>).
+    fill bg: fills the background (all transparent pixels).
+insert <filename>: inserts the pixel art in <filename> at the current position.
 save <filename>: saves the current canvas in a file of the name <filename>.
+move <x1> <y1> <x2> <y2> <x3> <y3>: moves the area between (<x1>, <y1>) and (<x2>, <y2>) to (<x3>, <y3>)
